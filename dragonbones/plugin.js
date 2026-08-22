@@ -344,6 +344,29 @@
           }
         }
       }
+      if (is50) {
+        const frames = list(object(animation.zOrder).frame);
+        let elapsed = 0;
+        const keys = frames.map((frame) => {
+          const encoded = list(frame.zOrder);
+          const offsets = [];
+          for (let index = 0; index + 1 < encoded.length; index += 2) {
+            const slotIndex = Math.trunc(num(encoded[index], -1));
+            const slot = project.draw_order[slotIndex];
+            if (slot == null) {
+              report.dangling.push({ what: "dragonbones draw-order slot", name: String(slotIndex) });
+              continue;
+            }
+            offsets.push([slot, Math.trunc(num(encoded[index + 1]))]);
+          }
+          const key = { time: elapsed / fps, offsets };
+          elapsed += num(frame.duration, 1);
+          return key;
+        });
+        if (keys.some((key) => key.offsets.length)) {
+          result.timelines.push({ kind: "draw_order", keys });
+        }
+      }
       if (list(animation.timeline).length) report.lossy.push({ what: "timeline", where: name,
         detail: "a DragonBones 5.6 generic timeline (numeric `type` codes) is not read yet" });
       project.animations.push(result);
