@@ -39,6 +39,28 @@
   }
   const flat = (keys, value) => keys.every((key) => Math.abs(key.value - value) < 1e-6);
 
+  // DragonBones 5.0 writes one combined frame stream per bone. Later exports
+  // split the same values into translateFrame / rotateFrame / scaleFrame.
+  // Normalize only the observed 5.0 layout here so the conversion below stays
+  // one path and later version semantics are left untouched.
+  function legacyBoneFrames(track) {
+    return list(track.frame).map((frame) => ({ ...frame, ...object(frame.transform) }));
+  }
+
+  function legacyRotation(frame) {
+    return num(frame.skY, num(frame.skX));
+  }
+
+  function legacyShearY(frame) {
+    const rotation = legacyRotation(frame);
+    return -(num(frame.skX, rotation) - rotation);
+  }
+
+  function legacyColor(frame) {
+    const color = object(frame.color);
+    return ["rM", "gM", "bM", "aM"].map((channel) => num(color[channel], 100) / 100);
+  }
+
   function atlasFor(fileName) {
     const stem = String(fileName || "").replace(/_ske\.json$/i, "").replace(/\.json$/i, "");
     const text = ankhimate.sidecar(`${stem}_tex.json`);
@@ -60,6 +82,7 @@
     const armatures = list(doc.armature);
     if (armatures.length === 0) throw new Error("not a DragonBones skeleton");
     const armature = armatures[0];
+    const is50 = /^5\.0(?:\.|$)/.test(String(doc.version || ""));
     const fps = Math.max(1, num(armature.frameRate, num(doc.frameRate, 24)));
     const report = { dangling: [], lossy: [] };
     const project = {
@@ -253,28 +276,42 @@
 
     for (const animation of list(armature.animation)) {
       const name = String(animation.name || "animation");
-      const result = { name, duration: num(animation.duration) / fps, looping: false, timelines: [], events: [] };
+      const result = { name, duration: num(animation.duration) / fps,
+        looping: animation.playTimes === 0, timelines: [], events: [] };
       for (const track of list(animation.bone)) {
         if (!boneByName[track.name]) {
           report.dangling.push({ what: "dragonbones animated bone", name: String(track.name || "") });
           continue;
         }
         const where = `${name}/${track.name}`;
-        if (Array.isArray(track.translateFrame)) {
+        const legacy = is50 ? legacyBoneFrames(track) : [];
+        const legacyTranslate = !Array.isArray(track.translateFrame);
+        const legacyRotate = !Array.isArray(track.rotateFrame);
+        const legacyScale = !Array.isArray(track.scaleFrame);
+        const translateFrames = legacyTranslate ? legacy : track.translateFrame;
+        const rotateFrames = legacyRotate ? legacy : track.rotateFrame;
+        const scaleFrames = legacyScale ? legacy : track.scaleFrame;
+        if (translateFrames.length) {
           for (const [axis, sign] of [["x", 1], ["y", -1]]) {
-            const keys = frameKeys(track.translateFrame, fps, (frame) => sign * num(frame[axis]), report, where);
+            const keys = frameKeys(translateFrames, fps, (frame) => sign * num(frame[axis]), report, where);
             if (!flat(keys, 0)) result.timelines.push({ kind: "bone_translate", bone: track.name, axis, keys });
           }
         }
-        if (Array.isArray(track.rotateFrame)) {
-          const keys = frameKeys(track.rotateFrame, fps, (frame) => -num(frame.rotate), report, where);
+        if (rotateFrames.length) {
+          const keys = frameKeys(rotateFrames, fps,
+            (frame) => legacyRotate ? -legacyRotation(frame) : -num(frame.rotate), report, where);
           if (!flat(keys, 0)) result.timelines.push({ kind: "bone_rotate", bone: track.name, keys });
         }
-        if (Array.isArray(track.scaleFrame)) {
+        if (scaleFrames.length) {
           for (const axis of ["x", "y"]) {
-            const keys = frameKeys(track.scaleFrame, fps, (frame) => num(frame[axis], 1), report, where);
+            const keys = frameKeys(scaleFrames, fps,
+              (frame) => num(legacyScale ? frame[axis === "x" ? "scX" : "scY"] : frame[axis], 1), report, where);
             if (!flat(keys, 1)) result.timelines.push({ kind: "bone_scale", bone: track.name, axis, keys });
           }
+        }
+        if (is50 && legacy.length) {
+          const keys = frameKeys(legacy, fps, legacyShearY, report, where);
+          if (!flat(keys, 0)) result.timelines.push({ kind: "bone_shear", bone: track.name, axis: "y", keys });
         }
       }
       for (const track of list(animation.slot)) {
@@ -282,15 +319,29 @@
           report.dangling.push({ what: "dragonbones animated slot", name: String(track.name || "") });
           continue;
         }
-        const frames = list(track.displayFrame), names = displayLists[track.name] || [];
+        const legacy = is50 ? list(track.frame) : [];
+        const legacyDisplay = !Array.isArray(track.displayFrame);
+        const frames = legacyDisplay ? legacy : track.displayFrame;
+        const names = displayLists[track.name] || [];
         let elapsed = 0;
         const keys = frames.map((frame) => {
-          const index = Math.trunc(num(frame.value));
+          const index = Math.trunc(num(legacyDisplay ? frame.displayIndex : frame.value));
           const key = { time: elapsed / fps, value: index < 0 ? null : (names[index] ?? null) };
           elapsed += num(frame.duration, 1); return key;
         });
-        if (keys.some((key, index) => index && key.value !== keys[index - 1].value)) {
+        if (keys.some((key, index) => key.value !== (index ? keys[index - 1].value : slotByName[track.name].attachment))) {
           result.timelines.push({ kind: "slot_attachment", slot: track.name, keys });
+        }
+        if (is50 && legacy.length) {
+          const colorKeys = frameKeys(legacy, fps, legacyColor, report, `${name}/${track.name}/color`);
+          if (colorKeys.some((key) => key.value.some((value) => Math.abs(value - 1) > 1e-6))) {
+            result.timelines.push({ kind: "slot_color", slot: track.name, keys: colorKeys });
+          }
+          if (legacy.some((frame) => ["rO", "gO", "bO", "aO"]
+            .some((channel) => num(object(frame.color)[channel]) !== 0))) {
+            report.lossy.push({ what: "slot color", where: `${name}/${track.name}`,
+              detail: "DragonBones 5.0 additive color offsets are not representable and were omitted" });
+          }
         }
       }
       if (list(animation.timeline).length) report.lossy.push({ what: "timeline", where: name,

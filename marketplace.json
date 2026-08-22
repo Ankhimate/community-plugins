@@ -11,8 +11,8 @@
     {
       "id": "dragonbones",
       "name": "DragonBones JSON",
-      "version": "0.1.0",
-      "description": "Import DragonBones JSON armatures.",
+      "version": "0.2.0",
+      "description": "Import DragonBones JSON armatures, including 5.0 animation data.",
       "files": ["plugin.js"]
     }
   ]
