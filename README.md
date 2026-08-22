@@ -1,16 +1,17 @@
 # Community format plugins
 
 These are ordinary sandboxed JavaScript plugins, not Rust crates or built-in
-format handlers. Their source ships as opt-in packages; installation writes the
-same editable JS files that a manually installed community plugin uses.
+format handlers. The editor fetches `marketplace.json` from this repository and
+installs the files it declares into the user's plugin directory. Adding a
+package to that index makes it available without an editor release.
 
 - `spine/` registers `import.spine` and `export.spine`. Its export template is
   a package resource read through `ankhimate.resource()`.
 - `dragonbones/` registers `import.dragonbones`.
 
-In the editor, open **File → Import → Community importers** and install the
-package you want. It is copied as ordinary JavaScript into Ankhimate's platform
-configuration `plugins` directory and discovered immediately. Manual installs
+In the editor, open **Settings → Plugins** and install the package you want. It
+is downloaded as ordinary JavaScript into Ankhimate's platform configuration
+`plugins` directory and discovered immediately. Manual installs
 work too: copy the whole directory, preserving `plugin.js` and any files beside
 it, then restart the editor. MCP reads the same directory when it starts.
 

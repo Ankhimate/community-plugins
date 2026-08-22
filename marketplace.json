@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "plugins": [
+    {
+      "id": "spine",
+      "name": "Spine JSON",
+      "version": "0.1.0",
+      "description": "Import and export Spine JSON skeletons.",
+      "files": ["plugin.js", "spine_json.json"]
+    },
+    {
+      "id": "dragonbones",
+      "name": "DragonBones JSON",
+      "version": "0.1.0",
+      "description": "Import DragonBones JSON armatures.",
+      "files": ["plugin.js"]
+    }
+  ]
+}
