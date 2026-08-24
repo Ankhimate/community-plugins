@@ -101,6 +101,14 @@
   function facingEffect(facing) {
     const slot_visibility = {};
     for (const slot of equipmentSlots()) {
+      // Hair's front/back names are depth layers around the head, not facing
+      // variants. Flash kept both containers visible and synchronized the rear
+      // one to the animated head marker.
+      const section = slot.slot.split(".")[1];
+      if (section === "hair") {
+        slot_visibility[slot.slot] = true;
+        continue;
+      }
       const variant = facingVariant(slot.bone);
       slot_visibility[slot.slot] = !variant || variant === facing;
     }
