@@ -112,9 +112,12 @@
         if (!bytes) throw new Error(`Tweegee Item is missing ${path}`);
         const assetName = `${target.name}.${index}`;
         const scale = Number(item.assetScale || 1);
-        const width = Number(layer.width || 0) / scale;
-        const height = Number(layer.height || 0) / scale;
-        project.assets.push({ name: assetName, file: layer.file, width, height });
+        const pixelWidth = Number(layer.width || 0);
+        const pixelHeight = Number(layer.height || 0);
+        const width = pixelWidth / scale;
+        const height = pixelHeight / scale;
+        project.assets.push({ name: assetName, file: layer.file,
+          width: pixelWidth, height: pixelHeight });
         images[assetName] = encode64(bytes);
         const slot = `${target.name}.${index}`;
         project.slots.push({ name: slot, bone: target.bone, attachment: assetName,
