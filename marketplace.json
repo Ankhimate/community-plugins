@@ -18,8 +18,8 @@
     {
       "id": "tweegee-item",
       "name": "Tweegee Item",
-      "version": "0.1.1",
-      "description": "Import ZIP-based Tweegee item packages as editable rigs.",
+      "version": "0.2.0",
+      "description": "Import and toggle ZIP-based Tweegee equipment on an open avatar.",
       "files": ["plugin.js"]
     }
   ]

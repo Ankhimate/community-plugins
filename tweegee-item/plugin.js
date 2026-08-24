@@ -76,7 +76,11 @@
     };
   }
 
-  function read(base64, fileName) {
+  const clean = (value) => String(value).replace(/[^A-Za-z0-9_.-]/g, "_");
+  const slotPrefix = (section) => `twitem.${clean(section)}.`;
+  const attachmentName = (itemId) => `twitem.${clean(itemId)}`;
+
+  function importItem(base64, fileName) {
     const files = storedZip(base64);
     if (!files["item.json"]) throw new Error("Tweegee Item is missing item.json");
     let item;
@@ -85,63 +89,104 @@
     if (item.version !== 1 || !Array.isArray(item.targets))
       throw new Error("unsupported Tweegee Item version");
 
-    const project = {
-      version: 3, name: `Tweegee Item ${item.itemId ?? fileName}`, fps: 24,
-      assets: [], bones: [], slots: [], draw_order: [], skins: [{ name: "default", entries: [] }],
-      default_skin: "default", constraints: [], constraint_order: [], animations: [],
-    };
-    const images = {}, bones = new Set();
-    function ensureBone(name) {
-      if (!name || bones.has(name)) return;
-      const split = name.lastIndexOf(".");
-      const parent = split < 0 ? "" : name.slice(0, split);
-      ensureBone(parent);
-      project.bones.push({ name, parent, length: 0, tx: 0, ty: 0, rotation: 0,
-        sx: 1, sy: 1, shear_x: 0, shear_y: 0,
-        inherit_rotation: true, inherit_scale: true, inherit_reflect: true });
-      bones.add(name);
-    }
+    const before = names();
+    const bones = new Set(before.bones), slots = new Set(before.slots), images = new Set(before.images);
+    const section = clean(item.section || "items"), itemId = clean(item.itemId ?? fileName);
+    const attachment = attachmentName(itemId);
 
     for (const target of item.targets) {
-      ensureBone(String(target.bone || target.name));
+      const bone = String(target.bone || target.name);
+      if (!bones.has(bone)) throw new Error(`Tweegee Item target bone \`${bone}\` is not in this avatar`);
       const placed = transform(target.transform);
       for (let index = 0; index < (target.layers || []).length; index++) {
         const layer = target.layers[index];
         const path = `images/${layer.file}`;
         const bytes = files[path];
         if (!bytes) throw new Error(`Tweegee Item is missing ${path}`);
-        const assetName = `${target.name}.${index}`;
+        const assetName = `twitem.${itemId}.${clean(target.name)}.${index}`;
         const scale = Number(item.assetScale || 1);
         const pixelWidth = Number(layer.width || 0);
         const pixelHeight = Number(layer.height || 0);
         const width = pixelWidth / scale;
         const height = pixelHeight / scale;
-        project.assets.push({ name: assetName, file: layer.file,
-          width: pixelWidth, height: pixelHeight });
-        images[assetName] = encode64(bytes);
-        const slot = `${target.name}.${index}`;
-        project.slots.push({ name: slot, bone: target.bone, attachment: assetName,
-          color: [1, 1, 1, 1], dark_color: null, blend_mode: "normal" });
-        project.draw_order.push(slot);
-        project.skins[0].entries.push({ slot, name: assetName, attachment: {
-          type: "region", texture: assetName,
-          offset_x: placed.x, offset_y: placed.y, rotation: placed.rotation,
+        if (!images.has(assetName)) {
+          ops.invoke("asset.add_image", { name: assetName, bytes_base64: encode64(bytes) });
+          images.add(assetName);
+        }
+        const slot = `${slotPrefix(section)}${clean(target.name)}.${index}`;
+        if (!slots.has(slot)) {
+          ops.invoke("slot.create", { name: slot, bone });
+          slots.add(slot);
+        }
+        ops.invoke("attachment.create_region", {
+          slot, name: attachment, texture: assetName,
+          x: placed.x, y: placed.y, rotation: placed.rotation,
           scale_x: placed.scaleX, scale_y: placed.scaleY,
-          width, height, uv: [0, 0, 1, 1],
+          width, height,
           pivot_x: Number(layer.pivotX ?? 0.5), pivot_y: Number(layer.pivotY ?? 0.5),
-        }});
+          show: false,
+        });
       }
     }
-    const report = { dangling: [], lossy: [] };
     if (item.targets.some((target) => (target.layers || []).some((layer) => layer.kind === "fill")))
-      report.lossy.push({ what: "item fill", where: String(item.itemId ?? fileName),
+      ops.invoke("import.report", { what: "item fill", where: itemId,
         detail: "fill indices are imported as ordinary image layers" });
-    ankhimate.importProject(project, images, report);
+    equip(section, itemId);
   }
 
-  ankhimate.registerImporter({
-    id: "import.twitem", label: "Tweegee Item", extensions: ["twitem"], binary: true,
-    canRead(base64) { return base64.startsWith("UEsDB"); },
-    read,
+  function inventory() {
+    const result = {};
+    for (const slot of names().attachments) {
+      if (!slot.slot.startsWith("twitem.")) continue;
+      const parts = slot.slot.split(".");
+      const section = parts[1];
+      for (const available of slot.available) {
+        if (!available.startsWith("twitem.")) continue;
+        const id = available.slice(7);
+        const key = `${section}:${id}`;
+        if (!result[key]) result[key] = { section, id, equipped: false };
+        if (slot.current === available) result[key].equipped = true;
+      }
+    }
+    return Object.values(result).sort((a, b) =>
+      a.section.localeCompare(b.section) || a.id.localeCompare(b.id));
+  }
+
+  function equip(section, itemId) {
+    const wanted = attachmentName(itemId);
+    const relevant = names().attachments.filter((slot) => slot.slot.startsWith(slotPrefix(section)));
+    const already = relevant.some((slot) => slot.current === wanted);
+    for (const slot of relevant) {
+      const available = slot.available.includes(wanted);
+      ops.invoke("slot.set_attachment", {
+        slot: slot.slot, attachment: !already && available ? wanted : null,
+      });
+    }
+  }
+
+  ankhimate.registerPanel({
+    id: "tweegee.items", title: "Tweegee Items",
+    build() {
+      const widgets = [
+        { heading: "Equipment" },
+        { file: "Import .twitem", on: "import", extensions: ["twitem"], multiple: true },
+      ];
+      for (const item of inventory()) widgets.push({
+        button: `${item.equipped ? "✓ " : ""}${item.section}: ${item.id}`,
+        on: `toggle:${item.section}:${item.id}`,
+      });
+      if (widgets.length === 2) widgets.push({ text: "No items imported.", weak: true });
+      return widgets;
+    },
+    on(action, value) {
+      if (action === "import") {
+        for (const file of value || []) importItem(file.bytes_base64, file.name);
+        return;
+      }
+      if (action.startsWith("toggle:")) {
+        const [, section, id] = action.split(":");
+        equip(section, id);
+      }
+    },
   });
 })();
