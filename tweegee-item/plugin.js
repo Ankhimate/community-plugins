@@ -80,6 +80,46 @@
   const slotPrefix = (section) => `twitem.${clean(section)}.`;
   const attachmentName = (itemId) => `twitem.${clean(itemId)}`;
 
+  function equipmentSlots() {
+    const skeleton = rig().skeleton;
+    const bones = new Map(skeleton.slots.map((slot) => [slot.name, slot]));
+    return names().attachments
+      .filter((slot) => slot.slot.startsWith("twitem."))
+      .map((slot) => ({ ...slot, bone: bones.get(slot.slot)?.bone, color: bones.get(slot.slot)?.color }));
+  }
+
+  function facingVariant(bone) {
+    if (!bone) return null;
+    if (bone.endsWith("_front") || bone.endsWith(".front")) return "Front";
+    if (bone.endsWith("_back") || bone.endsWith(".back")) return "Back";
+    return null;
+  }
+
+  function currentFacing() {
+    let front = 0, back = 0;
+    for (const slot of equipmentSlots()) {
+      if (!slot.current || Number(slot.color?.[3] ?? 1) <= 0) continue;
+      if (facingVariant(slot.bone) === "Front") front++;
+      if (facingVariant(slot.bone) === "Back") back++;
+    }
+    return back > front ? "Back" : "Front";
+  }
+
+  // Flash's `frontFacing` kept both variants loaded and toggled `.visible`.
+  // Slots have no setup visibility flag, so alpha is the equivalent that keeps
+  // the equipped attachment selected while hiding the opposite variant.
+  function setFacing(facing) {
+    for (const slot of equipmentSlots()) {
+      const variant = facingVariant(slot.bone);
+      const alpha = variant && variant !== facing ? 0 : 1;
+      const color = Array.isArray(slot.color) ? slot.color.slice(0, 4) : [1, 1, 1, 1];
+      while (color.length < 4) color.push(1);
+      if (Number(color[3]) === alpha) continue;
+      color[3] = alpha;
+      ops.invoke("slot.set_color", { slot: slot.slot, color });
+    }
+  }
+
   // The animation exporter leaves one empty slot at every Flash depth where
   // equipment may draw. Item layers need to sit beside that anchor; creating
   // slots normally appends them, which puts even `*_back` art over the entire
@@ -188,7 +228,8 @@
       ops.invoke("import.report", { what: "item fill", where: itemId,
         detail: "fill indices are imported as ordinary image layers" });
     placeEquipmentAtAnchors();
-    equip(section, itemId);
+    equip(section, itemId, false);
+    setFacing(currentFacing());
   }
 
   function inventory() {
@@ -209,16 +250,18 @@
       a.section.localeCompare(b.section) || a.id.localeCompare(b.id));
   }
 
-  function equip(section, itemId) {
+  function equip(section, itemId, toggle = true) {
     const wanted = attachmentName(itemId);
     const relevant = names().attachments.filter((slot) => slot.slot.startsWith(slotPrefix(section)));
     const already = relevant.some((slot) => slot.current === wanted);
+    const show = toggle ? !already : true;
     for (const slot of relevant) {
       const available = slot.available.includes(wanted);
       ops.invoke("slot.set_attachment", {
-        slot: slot.slot, attachment: !already && available ? wanted : null,
+        slot: slot.slot, attachment: show && available ? wanted : null,
       });
     }
+    if (show) setFacing(currentFacing());
   }
 
   ankhimate.registerPanel({
@@ -226,6 +269,8 @@
     build() {
       const widgets = [
         { heading: "Equipment" },
+        { choice: "Facing", on: "facing", options: ["Front", "Back"], value: currentFacing(),
+          tooltip: "Show the item's front-facing or back-facing layers." },
         { file: "Import .twitem", on: "import", extensions: ["twitem"], multiple: true },
       ];
       for (const item of inventory()) widgets.push({
@@ -236,6 +281,10 @@
       return widgets;
     },
     on(action, value) {
+      if (action === "facing") {
+        setFacing(value === "Back" ? "Back" : "Front");
+        return;
+      }
       if (action === "import") {
         for (const file of value || []) importItem(file.bytes_base64, file.name);
         return;
