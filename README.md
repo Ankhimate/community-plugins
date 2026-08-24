@@ -8,6 +8,8 @@ package to that index makes it available without an editor release.
 - `spine/` registers `import.spine` and `export.spine`. Its export template is
   a package resource read through `ankhimate.resource()`.
 - `dragonbones/` registers `import.dragonbones`.
+- `tweegee-item/` registers `import.twitem` for the game-specific `.twitem`
+  package format.
 
 In the editor, open **Settings → Plugins** and install the package you want. It
 is downloaded as ordinary JavaScript into Ankhimate's platform configuration
