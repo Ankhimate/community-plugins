@@ -95,29 +95,16 @@
     return null;
   }
 
-  function currentFacing() {
-    let front = 0, back = 0;
-    for (const slot of equipmentSlots()) {
-      if (!slot.current || Number(slot.color?.[3] ?? 1) <= 0) continue;
-      if (facingVariant(slot.bone) === "Front") front++;
-      if (facingVariant(slot.bone) === "Back") back++;
-    }
-    return back > front ? "Back" : "Front";
-  }
-
   // Flash's `frontFacing` kept both variants loaded and toggled `.visible`.
-  // Slots have no setup visibility flag, so alpha is the equivalent that keeps
-  // the equipped attachment selected while hiding the opposite variant.
-  function setFacing(facing) {
+  // Return the same transient view change to the host: no rig edit, no keys,
+  // and therefore safe while an animation is playing.
+  function facingEffect(facing) {
+    const slot_visibility = {};
     for (const slot of equipmentSlots()) {
       const variant = facingVariant(slot.bone);
-      const alpha = variant && variant !== facing ? 0 : 1;
-      const color = Array.isArray(slot.color) ? slot.color.slice(0, 4) : [1, 1, 1, 1];
-      while (color.length < 4) color.push(1);
-      if (Number(color[3]) === alpha) continue;
-      color[3] = alpha;
-      ops.invoke("slot.set_color", { slot: slot.slot, color });
+      slot_visibility[slot.slot] = !variant || variant === facing;
     }
+    return { slot_visibility };
   }
 
   // The animation exporter leaves one empty slot at every Flash depth where
@@ -229,7 +216,6 @@
         detail: "fill indices are imported as ordinary image layers" });
     placeEquipmentAtAnchors();
     equip(section, itemId, false);
-    setFacing(currentFacing());
   }
 
   function inventory() {
@@ -261,7 +247,6 @@
         slot: slot.slot, attachment: show && available ? wanted : null,
       });
     }
-    if (show) setFacing(currentFacing());
   }
 
   ankhimate.registerPanel({
@@ -269,7 +254,7 @@
     build() {
       const widgets = [
         { heading: "Equipment" },
-        { choice: "Facing", on: "facing", options: ["Front", "Back"], value: currentFacing(),
+        { choice: "Facing", on: "facing", options: ["Front", "Back"], value: "Front",
           tooltip: "Show the item's front-facing or back-facing layers." },
         { file: "Import .twitem", on: "import", extensions: ["twitem"], multiple: true },
       ];
@@ -280,18 +265,18 @@
       if (widgets.length === 2) widgets.push({ text: "No items imported.", weak: true });
       return widgets;
     },
-    on(action, value) {
+    on(action, value, state) {
       if (action === "facing") {
-        setFacing(value === "Back" ? "Back" : "Front");
-        return;
+        return facingEffect(value === "Back" ? "Back" : "Front");
       }
       if (action === "import") {
         for (const file of value || []) importItem(file.bytes_base64, file.name);
-        return;
+        return facingEffect(state.facing === "Back" ? "Back" : "Front");
       }
       if (action.startsWith("toggle:")) {
         const [, section, id] = action.split(":");
         equip(section, id);
+        return facingEffect(state.facing === "Back" ? "Back" : "Front");
       }
     },
   });
