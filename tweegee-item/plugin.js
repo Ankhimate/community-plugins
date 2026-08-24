@@ -97,6 +97,19 @@
     }
 
     const slotByName = new Map(skeleton.slots.map((slot) => [slot.name, slot]));
+    const anchorIndex = new Map();
+    skeleton.draw_order.forEach((name, index) => {
+      if (!name.startsWith("twitem.")) {
+        const bone = slotByName.get(name)?.bone;
+        if (bone && !anchorIndex.has(bone)) anchorIndex.set(bone, index);
+      }
+    });
+    const frontForBack = (bone) => bone.endsWith("_back")
+      ? `${bone.slice(0, -5)}_front`
+      : bone.endsWith(".back") ? `${bone.slice(0, -5)}.front` : null;
+    const backForFront = (bone) => bone.endsWith("_front")
+      ? `${bone.slice(0, -6)}_back`
+      : bone.endsWith(".front") ? `${bone.slice(0, -6)}.back` : null;
     const order = [];
     const placedBones = new Set();
     for (const name of skeleton.draw_order) {
@@ -104,8 +117,17 @@
       order.push(name);
       const bone = slotByName.get(name)?.bone;
       if (bone && byBone.has(bone) && !placedBones.has(bone)) {
+        const back = backForFront(bone);
+        if (back && byBone.has(back)
+          && anchorIndex.get(bone) < anchorIndex.get(back)) continue;
         order.push(...byBone.get(bone));
         placedBones.add(bone);
+        const front = frontForBack(bone);
+        if (front && byBone.has(front)
+          && anchorIndex.get(front) < anchorIndex.get(bone)) {
+          order.push(...byBone.get(front));
+          placedBones.add(front);
+        }
       }
     }
     for (const slot of equipment) {
