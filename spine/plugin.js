@@ -190,7 +190,7 @@
 
     const report = { dangling: [], lossy: [] };
     const project = {
-      version: 3,
+      version: 1,
       name: String(fileName || "imported").replace(/\.[^.]+$/, ""),
       fps: 30,
       assets: [], bones: [], slots: [], draw_order: [], skins: [],

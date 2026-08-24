@@ -4,14 +4,14 @@
     {
       "id": "spine",
       "name": "Spine JSON",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "Import and export Spine JSON skeletons.",
       "files": ["plugin.js", "spine_json.json"]
     },
     {
       "id": "dragonbones",
       "name": "DragonBones JSON",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "description": "Import DragonBones JSON armatures, including 5.0 animation data.",
       "files": ["plugin.js"]
     },

@@ -86,7 +86,7 @@
     const fps = Math.max(1, num(armature.frameRate, num(doc.frameRate, 24)));
     const report = { dangling: [], lossy: [] };
     const project = {
-      version: 3, name: String(doc.name || fileName || "imported").replace(/_ske\.json$/i, "").replace(/\.json$/i, ""),
+      version: 1, name: String(doc.name || fileName || "imported").replace(/_ske\.json$/i, "").replace(/\.json$/i, ""),
       fps: Math.round(fps), assets: [], bones: [], slots: [], draw_order: [], skins: [],
       default_skin: "default", constraints: [], constraint_order: [], animations: [],
     };
