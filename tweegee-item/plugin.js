@@ -80,6 +80,40 @@
   const slotPrefix = (section) => `twitem.${clean(section)}.`;
   const attachmentName = (itemId) => `twitem.${clean(itemId)}`;
 
+  // The animation exporter leaves one empty slot at every Flash depth where
+  // equipment may draw. Item layers need to sit beside that anchor; creating
+  // slots normally appends them, which puts even `*_back` art over the entire
+  // avatar. Rebuild the order around the animation's non-item anchors while
+  // preserving layer creation order within each target.
+  function placeEquipmentAtAnchors() {
+    const skeleton = rig().skeleton;
+    const equipment = skeleton.slots.filter((slot) => slot.name.startsWith("twitem."));
+    if (!equipment.length) return;
+
+    const byBone = new Map();
+    for (const slot of equipment) {
+      if (!byBone.has(slot.bone)) byBone.set(slot.bone, []);
+      byBone.get(slot.bone).push(slot.name);
+    }
+
+    const slotByName = new Map(skeleton.slots.map((slot) => [slot.name, slot]));
+    const order = [];
+    const placedBones = new Set();
+    for (const name of skeleton.draw_order) {
+      if (name.startsWith("twitem.")) continue;
+      order.push(name);
+      const bone = slotByName.get(name)?.bone;
+      if (bone && byBone.has(bone) && !placedBones.has(bone)) {
+        order.push(...byBone.get(bone));
+        placedBones.add(bone);
+      }
+    }
+    for (const slot of equipment) {
+      if (!placedBones.has(slot.bone)) order.push(slot.name);
+    }
+    ops.invoke("slot.set_draw_order", { slots: order });
+  }
+
   function importItem(base64, fileName) {
     const files = storedZip(base64);
     if (!files["item.json"]) throw new Error("Tweegee Item is missing item.json");
@@ -131,6 +165,7 @@
     if (item.targets.some((target) => (target.layers || []).some((layer) => layer.kind === "fill")))
       ops.invoke("import.report", { what: "item fill", where: itemId,
         detail: "fill indices are imported as ordinary image layers" });
+    placeEquipmentAtAnchors();
     equip(section, itemId);
   }
 
