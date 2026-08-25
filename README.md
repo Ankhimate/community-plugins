@@ -9,7 +9,8 @@ package to that index makes it available without an editor release.
   a package resource read through `ankhimate.resource()`.
 - `dragonbones/` registers `import.dragonbones`.
 - `tweegee-item/` registers the **Tweegee Items** panel, which imports and
-  equips the game-specific `.twitem` packages on the open avatar. Its facing
+  equips binary game-specific `.twitem` metadata and its sibling external atlas
+  on the open avatar. Its facing
   control reproduces the legacy avatar's visibility lists, root reflection,
   front/rear container reversal, and head-item depth change.
 

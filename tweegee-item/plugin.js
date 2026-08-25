@@ -1,5 +1,5 @@
 // Tweegee Item community plugin for Ankhimate.
-// Reads the ZIP-based .twitem format produced by tweegee-exporter.
+// Reads binary TWIT metadata and its external atlas pages.
 (function () {
   "use strict";
 
@@ -41,30 +41,90 @@
     let escaped = "";
     for (const byte of bytes) escaped += `%${byte.toString(16).padStart(2, "0")}`;
     try { return decodeURIComponent(escaped); }
-    catch (_) { throw new Error("Tweegee Item has an invalid UTF-8 entry name or manifest"); }
+    catch (_) { throw new Error("Tweegee Item contains invalid UTF-8"); }
   };
 
-  function storedZip(base64) {
-    const bytes = decode64(base64), files = {};
-    let offset = 0;
-    while (offset + 30 <= bytes.length && u32(bytes, offset) === 0x04034b50) {
-      const method = u16(bytes, offset + 8);
-      const size = u32(bytes, offset + 18);
-      const nameLength = u16(bytes, offset + 26);
-      const extraLength = u16(bytes, offset + 28);
-      if (method !== 0) throw new Error("Tweegee Item uses unsupported ZIP compression");
-      const nameStart = offset + 30;
-      const dataStart = nameStart + nameLength + extraLength;
-      const dataEnd = dataStart + size;
-      if (dataEnd > bytes.length) throw new Error("Tweegee Item has a truncated ZIP entry");
-      files[utf8(bytes.slice(nameStart, nameStart + nameLength))] = bytes.slice(dataStart, dataEnd);
-      offset = dataEnd;
+  function crc32(bytes) {
+    let crc = 0xffffffff;
+    for (const byte of bytes) {
+      crc = (crc ^ byte) >>> 0;
+      for (let bit = 0; bit < 8; bit++)
+        crc = ((crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0)) >>> 0;
     }
-    return files;
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function messagePack(bytes) {
+    let at = 0;
+    const take = () => {
+      if (at >= bytes.length) throw new Error("Tweegee Item has truncated MessagePack");
+      return bytes[at++];
+    };
+    const uint = (count) => {
+      let value = 0;
+      for (let i = 0; i < count; i++) value = value * 256 + take();
+      return value;
+    };
+    const string = (length) => {
+      if (at + length > bytes.length) throw new Error("Tweegee Item has truncated MessagePack");
+      const value = utf8(bytes.slice(at, at + length));
+      at += length;
+      return value;
+    };
+    const array = (length) => Array.from({length}, () => read());
+    const map = (length) => {
+      const value = {};
+      for (let i = 0; i < length; i++) value[String(read())] = read();
+      return value;
+    };
+    const float64 = () => {
+      const buffer = new ArrayBuffer(8), view = new DataView(buffer);
+      for (let i = 0; i < 8; i++) view.setUint8(i, take());
+      return view.getFloat64(0, false);
+    };
+    function read() {
+      const tag = take();
+      if (tag <= 0x7f) return tag;
+      if (tag >= 0xe0) return tag - 256;
+      if ((tag & 0xe0) === 0xa0) return string(tag & 31);
+      if ((tag & 0xf0) === 0x90) return array(tag & 15);
+      if ((tag & 0xf0) === 0x80) return map(tag & 15);
+      if (tag === 0xc0) return null;
+      if (tag === 0xc2 || tag === 0xc3) return tag === 0xc3;
+      if (tag === 0xcc) return uint(1);
+      if (tag === 0xcd) return uint(2);
+      if (tag === 0xce) return uint(4);
+      if (tag === 0xd2) { const n = uint(4); return n > 0x7fffffff ? n - 0x100000000 : n; }
+      if (tag === 0xcb) return float64();
+      if (tag === 0xd9) return string(uint(1));
+      if (tag === 0xda) return string(uint(2));
+      if (tag === 0xdc) return array(uint(2));
+      if (tag === 0xde) return map(uint(2));
+      throw new Error(`Tweegee Item uses unsupported MessagePack tag 0x${tag.toString(16)}`);
+    }
+    const value = read();
+    if (at !== bytes.length) throw new Error("Tweegee Item has trailing MessagePack data");
+    return value;
+  }
+
+  function twit(base64) {
+    const file = decode64(base64);
+    if (file.length < 16 || utf8(file.slice(0, 4)) !== "TWIT")
+      throw new Error("not a binary Tweegee Item");
+    if (u16(file, 4) !== 1) throw new Error(`unsupported Tweegee Item version ${u16(file, 4)}`);
+    if (file[6] !== 1) throw new Error(`unsupported Tweegee Item codec ${file[6]}`);
+    if (file[7] & ~1) throw new Error(`unsupported Tweegee Item flags ${file[7]}`);
+    let payload = file.slice(16);
+    if (file[7] & 1) payload = decode64(ankhimate.inflateRaw(encode64(payload)));
+    if (payload.length !== u32(file, 8)) throw new Error("Tweegee Item payload length mismatch");
+    if (crc32(payload) !== u32(file, 12)) throw new Error("Tweegee Item checksum mismatch");
+    return messagePack(payload);
   }
 
   function transform(matrix) {
-    const m = matrix || {};
+    const m = Array.isArray(matrix) ? {
+      a: matrix[0], b: matrix[1], c: matrix[2], d: matrix[3], tx: matrix[4], ty: matrix[5],
+    } : (matrix || {});
     const a = Number(m.a ?? 1), b = Number(m.b ?? 0);
     const c = Number(m.c ?? 0), d = Number(m.d ?? 1);
     const sx = Math.hypot(a, b) || 1;
@@ -216,19 +276,35 @@
     ops.invoke("slot.set_draw_order", { slots: order });
   }
 
-  function importItem(base64, fileName) {
-    const files = storedZip(base64);
-    if (!files["item.json"]) throw new Error("Tweegee Item is missing item.json");
-    let item;
-    try { item = JSON.parse(utf8(files["item.json"])); }
-    catch (_) { throw new Error("Tweegee Item has an invalid item.json"); }
+  function importItem(file) {
+    const packed = twit(file.bytes_base64);
+    const item = {
+      version: packed.v, itemId: packed.i, category: packed.c, section: packed.s,
+      assetScale: packed.z, pages: packed.p || [], targets: (packed.t || []).map((target) => ({
+        name: target.n, bone: target.b, transform: target.m,
+        layers: (target.l || []).map((layer) => ({
+          kind: layer.k === 1 ? "fill" : "merged", page: layer.q,
+          x: layer.x, y: layer.y, width: layer.w, height: layer.h,
+          source: layer.d, offset: layer.o, pivot: layer.r,
+          fillIndex: layer.f, parentCategory: layer.pc, parentRequired: layer.pr,
+        })),
+      })),
+    };
     if (item.version !== 1 || !Array.isArray(item.targets))
       throw new Error("unsupported Tweegee Item version");
 
     const before = names();
     const bones = new Set(before.bones), slots = new Set(before.slots), images = new Set(before.images);
-    const section = clean(item.section || "items"), itemId = clean(item.itemId ?? fileName);
+    const section = clean(item.section || "items"), itemId = clean(item.itemId ?? file.name);
     const attachment = attachmentName(itemId);
+    const pages = item.pages.map((page, index) => {
+      const encoded = (file.assets || {})[String(page.f || "")];
+      if (!encoded) throw new Error(`Tweegee Item is missing atlas page ${page.f || index}`);
+      const info = ankhimate.imageInfo(encoded);
+      if (info.width !== Number(page.w) || info.height !== Number(page.h))
+        throw new Error(`Tweegee Item atlas page ${page.f} dimensions do not match metadata`);
+      return encoded;
+    });
 
     for (const target of item.targets) {
       const bone = String(target.bone || target.name);
@@ -236,17 +312,21 @@
       const placed = transform(target.transform);
       for (let index = 0; index < (target.layers || []).length; index++) {
         const layer = target.layers[index];
-        const path = `images/${layer.file}`;
-        const bytes = files[path];
-        if (!bytes) throw new Error(`Tweegee Item is missing ${path}`);
+        const atlas = pages[Number(layer.page)];
+        if (!atlas) throw new Error(`Tweegee Item references missing atlas page ${layer.page}`);
+        const bytes = ankhimate.cropImage(atlas, {
+          x: Number(layer.x), y: Number(layer.y),
+          width: Number(layer.width), height: Number(layer.height),
+        });
         const assetName = `twitem.${itemId}.${clean(target.name)}.${index}`;
         const scale = Number(item.assetScale || 1);
-        const pixelWidth = Number(layer.width || 0);
-        const pixelHeight = Number(layer.height || 0);
+        const source = Array.isArray(layer.source) ? layer.source : [layer.width, layer.height];
+        const pixelWidth = Number(source[0] || 0);
+        const pixelHeight = Number(source[1] || 0);
         const width = pixelWidth / scale;
         const height = pixelHeight / scale;
         if (!images.has(assetName)) {
-          ops.invoke("asset.add_image", { name: assetName, bytes_base64: encode64(bytes) });
+          ops.invoke("asset.add_image", { name: assetName, bytes_base64: bytes });
           images.add(assetName);
         }
         const slot = `${slotPrefix(section)}${clean(target.name)}.${index}`;
@@ -259,7 +339,7 @@
           x: placed.x, y: placed.y, rotation: placed.rotation,
           scale_x: placed.scaleX, scale_y: placed.scaleY,
           width, height,
-          pivot_x: Number(layer.pivotX ?? 0.5), pivot_y: Number(layer.pivotY ?? 0.5),
+          pivot_x: Number(layer.pivot?.[0] ?? 0.5), pivot_y: Number(layer.pivot?.[1] ?? 0.5),
           show: false,
         });
       }
@@ -309,7 +389,8 @@
         { heading: "Equipment" },
         { choice: "Facing", on: "facing", options: ["Front", "Back"], value: "Front",
           tooltip: "Show the item's front-facing or back-facing layers." },
-        { file: "Import .twitem", on: "import", extensions: ["twitem"], multiple: true },
+        { file: "Import .twitem", on: "import", extensions: ["twitem"], multiple: true,
+          assets: true },
       ];
       for (const item of inventory()) widgets.push({
         button: `${item.equipped ? "✓ " : ""}${item.section}: ${item.id}`,
@@ -323,7 +404,7 @@
         return facingEffect(value === "Back" ? "Back" : "Front");
       }
       if (action === "import") {
-        for (const file of value || []) importItem(file.bytes_base64, file.name);
+        for (const file of value || []) importItem(file);
         return facingEffect(state.facing === "Back" ? "Back" : "Front");
       }
       if (action.startsWith("toggle:")) {
