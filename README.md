@@ -9,7 +9,9 @@ package to that index makes it available without an editor release.
   a package resource read through `ankhimate.resource()`.
 - `dragonbones/` registers `import.dragonbones`.
 - `tweegee-item/` registers the **Tweegee Items** panel, which imports and
-  equips the game-specific `.twitem` packages on the open avatar.
+  equips the game-specific `.twitem` packages on the open avatar. Its facing
+  control reproduces the legacy avatar's visibility lists, root reflection,
+  front/rear container reversal, and head-item depth change.
 
 In the editor, open **Settings → Plugins** and install the package you want. It
 is downloaded as ordinary JavaScript into Ankhimate's platform configuration

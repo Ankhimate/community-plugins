@@ -18,7 +18,7 @@
     {
       "id": "tweegee-item",
       "name": "Tweegee Item",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "description": "Import and toggle ZIP-based Tweegee equipment on an open avatar.",
       "files": ["plugin.js"]
     }

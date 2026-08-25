@@ -88,31 +88,76 @@
       .map((slot) => ({ ...slot, bone: bones.get(slot.slot)?.bone, color: bones.get(slot.slot)?.color }));
   }
 
-  function facingVariant(bone) {
+  function startsAt(bone, name) {
+    return bone === name || bone.startsWith(`${name}.`);
+  }
+
+  function facingMembership(bone) {
     if (!bone) return null;
-    if (bone.endsWith("_front") || bone.endsWith(".front")) return "Front";
-    if (bone.endsWith("_back") || bone.endsWith(".back")) return "Back";
+    if (startsAt(bone, "avatar_head.face")) return "Front";
+    // Hair and head equipment remain visible; Flash changes their depth.
+    if (bone.endsWith("hair_front") || bone.endsWith("hair_back")
+      || startsAt(bone, "avatar_head.item_front")
+      || startsAt(bone, "avatar_head.item_back")
+      || startsAt(bone, "avatar_back.item_head_back")) return "Both";
+    // This asymmetric legacy membership is intentional: Avatar.frontElements
+    // and Avatar.backElements both contain the rear container's left-front
+    // holder, while its left-back holder belongs to neither list.
+    if (startsAt(bone, "avatar_back.item_left_front")) return "Both";
+    if (startsAt(bone, "avatar_back.item_left_back")) return null;
+    const segment = bone.slice(bone.lastIndexOf(".") + 1);
+    if (segment === "clothing_front" || segment === "item_front"
+      || segment.endsWith("_front")) return "Front";
+    if (segment === "clothing_back" || segment === "item_back"
+      || segment.endsWith("_back")) return "Back";
     return null;
   }
 
-  // Flash's `frontFacing` kept both variants loaded and toggled `.visible`.
-  // Return the same transient view change to the host: no rig edit, no keys,
-  // and therefore safe while an animation is playing.
+  function facingDrawOrder(facing, skeleton) {
+    const slotByName = new Map(skeleton.slots.map((slot) => [slot.name, slot]));
+    const base = skeleton.draw_order.slice();
+    const isGroup = (name, group) => startsAt(slotByName.get(name)?.bone || "", group);
+    const rear = base.filter((name) => isGroup(name, "avatar_back"));
+    const front = base.filter((name) => isGroup(name, "avatar_front"));
+    let middle = base.filter((name) => !isGroup(name, "avatar_back") && !isGroup(name, "avatar_front"));
+
+    // Flash moves head.item_front to the top/bottom of the head container.
+    const headItem = middle.filter((name) => isGroup(name, "avatar_head.item_front"));
+    middle = middle.filter((name) => !isGroup(name, "avatar_head.item_front"));
+    const headIndices = middle
+      .map((name, index) => isGroup(name, "avatar_head") ? index : -1)
+      .filter((index) => index >= 0);
+    if (headItem.length && headIndices.length) {
+      const insertAt = facing === "Front"
+        ? headIndices[headIndices.length - 1] + 1
+        : headIndices[0];
+      middle.splice(insertAt, 0, ...headItem);
+    } else {
+      middle.push(...headItem);
+    }
+    return facing === "Front"
+      ? [...rear, ...middle, ...front]
+      : [...front, ...middle, ...rear];
+  }
+
+  // Reproduce Avatar.updateVisible as transient editor state: visibility,
+  // top-level depth, head-item depth, and the dummy's horizontal reflection.
   function facingEffect(facing) {
     const slot_visibility = {};
-    for (const slot of equipmentSlots()) {
-      // Hair's front/back names are depth layers around the head, not facing
-      // variants. Flash kept both containers visible and synchronized the rear
-      // one to the animated head marker.
-      const section = slot.slot.split(".")[1];
-      if (section === "hair") {
-        slot_visibility[slot.slot] = true;
+    const skeleton = rig().skeleton;
+    for (const slot of skeleton.slots) {
+      if (slot.name.startsWith("twitem.hair.")) {
+        slot_visibility[slot.name] = true;
         continue;
       }
-      const variant = facingVariant(slot.bone);
-      slot_visibility[slot.slot] = !variant || variant === facing;
+      const membership = facingMembership(slot.bone);
+      if (membership) slot_visibility[slot.name] = membership === "Both" || membership === facing;
     }
-    return { slot_visibility };
+    const root = skeleton.bones.find((bone) => bone.name === "root" && !bone.parent)
+      || skeleton.bones.find((bone) => !bone.parent);
+    const bone_scale_x = {};
+    if (root) bone_scale_x[root.name] = Math.abs(Number(root.sx || 1)) * (facing === "Front" ? 1 : -1);
+    return { slot_visibility, bone_scale_x, draw_order: facingDrawOrder(facing, skeleton) };
   }
 
   // The animation exporter leaves one empty slot at every Flash depth where
